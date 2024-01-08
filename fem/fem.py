@@ -4,6 +4,7 @@ from topopt.mesh import Displacement,Force
 
 logger = logging.getLogger('topopt')
 
+
 class FEModel:
     def __init__(self,mesh,mat,ElementTypeClass):
         self.elements = mesh.elements
@@ -40,9 +41,9 @@ class FEModel:
             elem_to_dof_map[idx,:] = dofs_on_elem
         return elem_to_dof_map
 
-    def _assemble(self):
+    def _assemble(self,x=None):
         self._K = np.zeros((self.ndofs,self.ndofs))
-        for el in self.elements:
+        for idx,el in enumerate(self.elements):
             el_no = el[0]
             et_no = el[1]
             nodes_on_elem = el[3:]
@@ -51,14 +52,20 @@ class FEModel:
             kl = self.ets[et_no].kloc(nodal_coords)
             rows = np.tile(dofs.reshape(len(dofs),1),len(dofs))
             cols = np.tile(dofs.reshape(1,len(dofs)),(len(dofs),1))
-            self._K[rows,cols] += kl
+            if not x is None:
+                self._K[rows,cols] += kl*x[idx]
+            else: 
+                self._K[rows,cols] += kl
 
     @property
     def K(self):
         return self._K
     
-    def apply_bcs(bcs):
+    def apply_bcs(self,bcs):
         pass
+
+    def update_system_matrix(self,x):
+        self._assemble(x)
 
     def solve(self,support,load=None):
         neq = self._K.shape[0]
