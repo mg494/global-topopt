@@ -8,6 +8,7 @@ logger = logging.getLogger('topopt')
 class FEModel:
     def __init__(self,mesh,mat,ElementTypeClass):
         self.elements = mesh.elements
+        self.nelem = len(mesh.elements[:,0])
         self.nodes = mesh.nodal_coords
         self.dofs_per_node = ElementTypeClass.dofs_per_node
         self.ndofs = mesh.nnodes * self.dofs_per_node
@@ -66,6 +67,18 @@ class FEModel:
 
     def update_system_matrix(self,x):
         self._assemble(x)
+
+    def strain_energy(self,u):
+        stren = np.zeros(self.elements[:,0].shape[0])
+        for idx,el in enumerate(self.elements):
+            el_no = el[0]
+            et_no = el[1]
+            nodes_on_elem = el[3:]
+            nodal_coords = self.nodes[nodes_on_elem]
+            dofs = self.elem_to_dof_map[el_no]
+            kl = self.ets[et_no].kloc(nodal_coords)
+            stren[idx]=0.5*np.matmul(u[dofs].T,np.matmul(kl,u[dofs])) #np.random.randint(5) stren[idx]= 
+        return stren
 
     def solve(self,support,load=None):
         neq = self._K.shape[0]
