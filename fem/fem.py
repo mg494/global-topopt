@@ -1,6 +1,7 @@
 import numpy as np
 import logging
 from topopt.mesh import Displacement,Force
+import torch, sys,os
 
 logger = logging.getLogger('topopt')
 
@@ -15,6 +16,12 @@ class FEModel:
 
         self.node_to_dof_map = self._make_node_to_dof_map(self.nodes,self.dofs_per_node)
         self.elem_to_dof_map = self._make_elem_to_dof_map(self.elements,self.node_to_dof_map)
+        # 3d matrix to save local system matrices for post processing
+        os.remove("edata.npy")
+        self.klocs = None
+
+        # assembly should only happen when K was manipulated 
+        self.K_changed = False
 
         # instantiate element type for each unique 
         # element and material combination
@@ -44,6 +51,7 @@ class FEModel:
 
     def _assemble(self,x=None):
         self._K = np.zeros((self.ndofs,self.ndofs))
+        kls = np.ndarray((self.nelem,8,8))
         for idx,el in enumerate(self.elements):
             el_no = el[0]
             et_no = el[1]
@@ -51,13 +59,30 @@ class FEModel:
             nodal_coords = self.nodes[nodes_on_elem]
             dofs = self.elem_to_dof_map[el_no]
             kl = self.ets[et_no].kloc(nodal_coords)
+            kls[idx,:,:] = kl
             rows = np.tile(dofs.reshape(len(dofs),1),len(dofs))
             cols = np.tile(dofs.reshape(1,len(dofs)),(len(dofs),1))
             if not x is None:
                 self._K[rows,cols] += kl*x[idx]
             else: 
                 self._K[rows,cols] += kl
+        np.save("edata",kls)
+        if "edata.npy" in os.listdir("./"): logger.info("saved edata to disk")
 
+    def kill_elem(self,elem,fact=0.999):
+        self.K_changed =True
+        el = self.elements[elem]
+        el_no = el[0]
+        et_no = el[1]
+        nodes_on_elem = el[3:]
+        nodal_coords = self.nodes[nodes_on_elem]
+        dofs = self.elem_to_dof_map[el_no]
+        kl = self.ets[et_no].kloc(nodal_coords)
+        rows = np.tile(dofs.reshape(len(dofs),1),len(dofs))
+        cols = np.tile(dofs.reshape(1,len(dofs)),(len(dofs),1))
+        self._K[rows,cols] -= fact*kl
+        return self._K
+    
     @property
     def K(self):
         return self._K
@@ -69,16 +94,19 @@ class FEModel:
         self._assemble(x)
 
     def strain_energy(self,u):
-        stren = np.zeros(self.elements[:,0].shape[0])
-        for idx,el in enumerate(self.elements):
-            el_no = el[0]
-            et_no = el[1]
-            nodes_on_elem = el[3:]
-            nodal_coords = self.nodes[nodes_on_elem]
-            dofs = self.elem_to_dof_map[el_no]
-            kl = self.ets[et_no].kloc(nodal_coords)
-            stren[idx]=0.5*np.matmul(u[dofs].T,np.matmul(kl,u[dofs])) #np.random.randint(5) stren[idx]= 
-        return stren
+        if not isinstance(self.klocs,torch.Tensor):
+            self.klocs = torch.Tensor(np.load("edata.npy")).to("cuda")
+        u = torch.Tensor(u[self.elem_to_dof_map]).to("cuda")
+        return torch.matmul(u,torch.matmul(self.klocs,u.mT)).cpu().numpy()
+    
+    def cuda_solve(self,support,load):
+        K = torch.Tensor(self._K).to("cuda")
+        load_dofs = load.get_constrained_dofs(self.node_to_dof_map)
+        load_vals = load.get_constrained_values()
+        F = torch.Tensor([0]*self.ndofs)
+        F[load_dofs] = torch.Tensor(load_vals)
+        F = F.to("cuda")
+        return torch.linalg.solve(K,F).cpu().numpy()
 
     def solve(self,support,load=None):
         neq = self._K.shape[0]
