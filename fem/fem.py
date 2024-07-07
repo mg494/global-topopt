@@ -20,9 +20,6 @@ class FEModel:
         os.remove("edata.npy")
         self.klocs = None
 
-        # assembly should only happen when K was manipulated 
-        self.K_changed = False
-
         # instantiate element type for each unique 
         # element and material combination
         et_mat = self.elements[:,1:3]
@@ -70,7 +67,6 @@ class FEModel:
         if "edata.npy" in os.listdir("./"): logger.info("saved edata to disk")
 
     def kill_elem(self,elem,fact=0.999):
-        self.K_changed =True
         el = self.elements[elem]
         el_no = el[0]
         et_no = el[1]
@@ -87,26 +83,8 @@ class FEModel:
     def K(self):
         return self._K
     
-    def apply_bcs(self,bcs):
-        pass
-
     def update_system_matrix(self,x):
         self._assemble(x)
-
-    def strain_energy(self,u):
-        if not isinstance(self.klocs,torch.Tensor):
-            self.klocs = torch.Tensor(np.load("edata.npy")).to("cuda")
-        u = torch.Tensor(u[self.elem_to_dof_map]).to("cuda")
-        return torch.matmul(u,torch.matmul(self.klocs,u.mT)).cpu().numpy()
-    
-    def cuda_solve(self,support,load):
-        K = torch.Tensor(self._K).to("cuda")
-        load_dofs = load.get_constrained_dofs(self.node_to_dof_map)
-        load_vals = load.get_constrained_values()
-        F = torch.Tensor([0]*self.ndofs)
-        F[load_dofs] = torch.Tensor(load_vals)
-        F = F.to("cuda")
-        return torch.linalg.solve(K,F).cpu().numpy()
 
     def solve(self,support,load=None):
         neq = self._K.shape[0]

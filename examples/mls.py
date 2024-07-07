@@ -4,10 +4,14 @@ import numpy as np
 from topopt.physical import Material
 from topopt.mesh import Mesh, Displacement, Force
 from fem.fem import FEModel,StructuralElement
-import torch
+import torch,sys
+import logging 
 
 from utils.post import plot_dof
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+
+logger = logging.getLogger('topopt')
 
 class TopoModel:
     def __init__(self,fem,support,load):
@@ -37,9 +41,8 @@ class TopoModel:
         
     def _apply_bcs(self,Kmat):
         K = torch.Tensor(np.delete(np.delete(Kmat,self.constrained_dofs,axis=1),self.constrained_dofs,axis=0))
-        # F = torch.Tensor(np.delete(Fvec,self.constrained_dofs))
-        return K#,F
-
+        return K
+    
     def init_Kmat(self):
         self.Kmat = self._apply_bcs(self.model.K)#,self.Fvec
 
@@ -48,15 +51,13 @@ class TopoModel:
 
     def solve(self,device="cuda"):
         K,F = self.Kmat.to(device),self.Fvec.to(device)
-        u = torch.linalg.solve(K,F)
         uall = torch.zeros((self.ndofs,1)).to(device)
-        uall[self.idx] = u
+        uall[self.idx] = torch.linalg.solve(K,F)
         return uall
 
     def strain_energy(self,deform:torch.Tensor,device="cuda"):
         klocs = torch.Tensor(np.load("edata.npy")).to(device)
         deform = deform[self.model.elem_to_dof_map]
-        # deformT =deform[self.model.elem_to_dof_map].T
         tutu =torch.matmul(klocs,deform)
         return torch.matmul(deform.mT,tutu).cpu().numpy().flatten()
 
@@ -96,7 +97,7 @@ class TopoEnv():
         self.count += 1
         if self.count > 50: done=True
         else: done = False
-        return self.elem_state,reward,done #np.concatenate((new_x,new_strain_en))
+        return self.elem_state,reward,done 
 
 class TopoAgent:
     def __init__(self,state_size,action_size):
@@ -132,11 +133,16 @@ fem = FEModel(mesh,mat,StructuralElement)
 episodes = 5000
 
 env = TopoEnv(fem,support,load)
-# state = env.reset()
-state_size = 2*ndiv**2 # env.observation_space.shape[0]
-action_size = ndiv**2 # env.action_space.shape[0]
+state_size = 2*ndiv**2
+action_size = ndiv**2 
 agent = TopoAgent(state_size,action_size)
 
+fig,axs=plt.subplots(1,1)
+colors = ["white", "grey","grey","blue"]
+nodes = [0.0, 0.4, 0.6,1.0]
+cmap = LinearSegmentedColormap.from_list("mycmap", list(zip(nodes, colors)))
+
+logger.info("starts training loop")
 for episode in range(episodes):
     state = env.reset()
     total_reward = 0
@@ -147,7 +153,10 @@ for episode in range(episodes):
         #print("killed elem",action,"reward",reward)
         state = next_state
         total_reward += reward
-
+        if "plot" in sys.argv: 
+            # axs.imshow(env.elem_state.reshape((ndiv,ndiv)),cmap=cmap,origin="lower")
+            # plt.savefig("elem_state.png")
+            np.save("out.npy",env.elem_state)
         if done:
             print(f"Episode: {episode + 1}, Total Reward: {total_reward}")
             break

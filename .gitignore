@@ -11,3 +11,4 @@ optim.rst
 edata.npy
 examples\test.py
 tests/*.code-workspace
+out.npy
