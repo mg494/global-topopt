@@ -4,8 +4,11 @@ import numpy as np
 from topopt.physical import Material
 from topopt.mesh import Mesh, Displacement, Force
 from fem.fem import FEModel,StructuralElement
-import torch,sys
-import logging 
+import sys, logging
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 from utils.post import plot_dof
 import matplotlib.pyplot as plt
@@ -78,11 +81,12 @@ class TopoEnv():
         # solve initial state
         self.u = self.model.solve()
         strain_en = self.model.strain_energy(self.u)
-
+        
         # reset counter each episode
         self.count = 0
         self.init_strain_energy = sum(strain_en)
-        return self.elem_state,strain_en
+
+        return np.concatenate((self.elem_state,strain_en),axis=0)
 
     def step(self,action):
         # substract selected element from stiffness matrix
@@ -95,26 +99,81 @@ class TopoEnv():
 
         reward = (self.init_strain_energy/sum(new_strain_en))**2+(sum(self.elem_state/self.init_vol))**2
         self.count += 1
-        if self.count > 50: done=True
+        if self.count > len(self.elem_state): done=True 
         else: done = False
-        return self.elem_state,reward,done 
+        return np.concatenate((self.elem_state,new_strain_en),axis=0),reward,done 
+
+class Actor(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Actor, self).__init__()
+        self.fc1 = nn.Linear(state_dim, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, action_dim)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, state):
+        x = torch.relu(self.fc1(state))
+        x = torch.relu(self.fc2(x))
+        action_probs = self.softmax(self.fc3(x))
+        return action_probs
+
+class Critic(nn.Module):
+    def __init__(self, state_dim):
+        super(Critic, self).__init__()
+        self.fc1 = nn.Linear(state_dim, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, 1)
+
+    def forward(self, state):
+        x = torch.relu(self.fc1(state))
+        x = torch.relu(self.fc2(x))
+        state_value = self.fc3(x)
+        return state_value
+
 
 class TopoAgent:
-    def __init__(self,state_size,action_size):
-        self.state_size = state_size
-        self.action_size = action_size
+    def __init__(self, state_dim, action_dim, actor_lr=1e-3, critic_lr=1e-3):
+        self.actor = Actor(state_dim, action_dim)
+        self.critic = Critic(state_dim)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_lr)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_lr)
+        self.gamma = 0.99
 
-    def select_action(self,state):
-        return np.random.choice(self.action_size) # exploration only
+    def select_action(self, state):
+        state = torch.FloatTensor(state).unsqueeze(0)
+        action_probs = self.actor(state)
+        action_dist = torch.distributions.Categorical(action_probs)
+        action = action_dist.sample()
+        action_one_hot = torch.nn.functional.one_hot(action, num_classes=action_probs.shape[-1])
+        return action_one_hot.squeeze(0).numpy(), action_dist.log_prob(action)
+    
+    def update(self, state, action_log_prob, reward, next_state, done):
+        state = torch.FloatTensor(state).unsqueeze(0)
+        next_state = torch.FloatTensor(next_state).unsqueeze(0)
+        reward = torch.FloatTensor([reward])
+        done = torch.FloatTensor([1 - done])
 
-    def remember(self,state,action,reward,next_state):
-        pass
+        # Update Critic
+        value = self.critic(state)
+        next_value = self.critic(next_state)
+        target_value = reward + self.gamma * next_value * done
+        critic_loss = nn.MSELoss()(value, target_value.detach())
 
-    def replay(self,batch_size):
-        pass
+        self.critic_optimizer.zero_grad()
+        critic_loss.backward()
+        self.critic_optimizer.step()
+
+        # Update Actor
+        advantage = (target_value - value).detach()
+        actor_loss = -action_log_prob * advantage
+
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        self.actor_optimizer.step()
+
 
 # Mesh and Model init
-ndiv = 20
+ndiv = 10
 mesh = Mesh()
 mesh.rect_mesh(ndiv)
 
@@ -148,15 +207,21 @@ for episode in range(episodes):
     total_reward = 0
 
     while True:
-        action = agent.select_action(state)
+        action_one_hot,action_log_prob = agent.select_action(state)
+        action = np.argmax(action_one_hot)
         next_state,reward,done = env.step(action)
+        agent.update(state, action_log_prob, reward, next_state, done)
+
         #print("killed elem",action,"reward",reward)
         state = next_state
         total_reward += reward
         if "plot" in sys.argv: 
-            # axs.imshow(env.elem_state.reshape((ndiv,ndiv)),cmap=cmap,origin="lower")
-            # plt.savefig("elem_state.png")
             np.save("out.npy",env.elem_state)
+
+        if "save" in sys.argv:
+            axs.imshow(env.elem_state.reshape((ndiv,ndiv)),cmap=cmap,origin="lower")
+            plt.savefig("output/elem_state_{}.png".format(episode))
+        
         if done:
             print(f"Episode: {episode + 1}, Total Reward: {total_reward}")
             break

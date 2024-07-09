@@ -17,7 +17,10 @@ class FEModel:
         self.node_to_dof_map = self._make_node_to_dof_map(self.nodes,self.dofs_per_node)
         self.elem_to_dof_map = self._make_elem_to_dof_map(self.elements,self.node_to_dof_map)
         # 3d matrix to save local system matrices for post processing
-        os.remove("edata.npy")
+        try: 
+            os.remove("edata.npy") 
+        except FileNotFoundError: 
+            pass
         self.klocs = None
 
         # instantiate element type for each unique 
