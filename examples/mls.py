@@ -5,6 +5,7 @@ from topopt.physical import Material
 from topopt.mesh import Mesh, Displacement, Force
 from fem.fem import FEModel,StructuralElement
 import sys, logging, glob,os
+from timeit import default_timer as timer
 
 from utils.post import plot_dof
 from topopt.env import TopoEnv
@@ -51,7 +52,7 @@ logger.info("starts training loop")
 for episode in range(episodes):
     state = env.reset()
     total_reward = 0
-
+    start_time = timer()
     while True:
         action_one_hot,action_log_prob = agent.select_action(state)
         action = np.argmax(action_one_hot)
@@ -69,5 +70,6 @@ for episode in range(episodes):
             plt.savefig("output/elem_state_{}.png".format(episode))
         
         if done:
-            print(f"Episode: {episode + 1}, Total Reward: {total_reward}")
+            end_time = timer()
+            print(f"Episode: {episode + 1}, Total Reward: {total_reward}, Time: {end_time-start_time}")
             break
