@@ -3,50 +3,72 @@ import numpy as np
 
 class TopoModel:
     def __init__(self,fem,support,load):
+
+        # store basics
         self.model = fem
         self.nelem = fem.nelem
         self.ndofs = fem.ndofs
+        
+        # store element matrices
+        self.klocs = torch.Tensor(np.load("edata.npy")).to("cuda")
+        
+        # store system of linear equations
+        # Kmat holds the stiffness values of the fully filled domain
+        self.Kmat = torch.Tensor(fem.K).to("cuda")
+        self.Fvec = torch.zeros((self.ndofs,1))
 
-        self.Kmat = None
-        self.Fvec = None
-
-        # get fem object and apply boundary conditions
-        # save updated dof maps
-        # calc and save initial state as Kmat and deform vector
-        # each kill elem call updates the Kmat
-        # each solve call solves with the updated Kmats
-
+        # store load data from loads object
         self.constrained_dofs = support.get_constrained_dofs(self.model.node_to_dof_map)
         self.Fvec = np.zeros(self.model.ndofs)
         self.Fvec[load.get_constrained_dofs(self.model.node_to_dof_map)] = load.get_constrained_values()
         self.Fvec = torch.Tensor(np.delete(self.Fvec,self.constrained_dofs))
 
+        # init Kmat with bcs applied
+        # Kidx holds all equation numbers of unconstrained dofs
+        self.Kidx = list(range(self.ndofs))
+        for num in self.constrained_dofs: self.Kidx.remove(num)
+
+        # Ksub is the matrix where the stiffness terms of all deleted elements
+        # are stored. It has the dimensions of the initial Kmat
+        # and is substracted from Kmat
+        self.Ksub=torch.zeros_like(self.Kmat).to("cuda")
+
+        # The Tensor K holds the stiffness of the modified domain
+        # the dimension is less than Ksub and Kmat and is used to solve
+        # the system of linear equations
+        self.K = self._apply_bcs(self.Kmat-self.Ksub)#[:,self.Kidx][self.Kidx,:].to("cuda")
+
+        # index to broadcast u to uall
         self.idx = torch.ones((self.ndofs,1))
         for dof in self.constrained_dofs:
             self.idx[dof]=0
         self.idx =self.idx.to(torch.bool)
         self.idx =self.idx.to("cuda")
         
+        # element to dof map
+        self.e2dofmap = self.model.elem_to_dof_map
+        
     def _apply_bcs(self,Kmat):
-        K = torch.Tensor(np.delete(np.delete(Kmat,self.constrained_dofs,axis=1),self.constrained_dofs,axis=0))
-        return K
+        return Kmat[:,self.Kidx][self.Kidx,:]
     
     def init_Kmat(self):
-        self.Kmat = self._apply_bcs(self.model.K)#,self.Fvec
+        self.Ksub = torch.zeros_like(self.Kmat).to("cuda")
 
     def kill_elem(self,elem):
-        self.Kmat = self._apply_bcs(self.model.kill_elem(elem))
+        #print(elem,self.klocs[elem],self.e2dofmap[elem])
+        #K = self.model.kill_elem(elem)
+        self.Ksub[:,self.e2dofmap[elem]][self.e2dofmap[elem],:] -= self.klocs[elem]
+        self.K = self._apply_bcs(self.Kmat-self.Ksub)
 
     def solve(self,device="cuda"):
-        K,F = self.Kmat.to(device),self.Fvec.to(device)
+        K,F = self.K.to(device),self.Fvec.to(device)
         uall = torch.zeros((self.ndofs,1)).to(device)
         uall[self.idx] = torch.linalg.solve(K,F)
         return uall
 
     def strain_energy(self,deform:torch.Tensor,device="cuda"):
-        klocs = torch.Tensor(np.load("edata.npy")).to(device)
         deform = deform[self.model.elem_to_dof_map]
-        tutu =torch.matmul(klocs,deform)
+        tutu =torch.matmul(self.klocs,deform)
         return torch.matmul(deform.mT,tutu).cpu().numpy().flatten()
 
 class TopoEnv():
