@@ -54,11 +54,10 @@ class TopoModel:
     def init_Kmat(self):
         self.Ksub = torch.zeros_like(self.Kmat).to("cuda")
 
-    def kill_elem(self,elem):
-        #print(elem,self.klocs[elem],self.e2dofmap[elem])
-        #K = self.model.kill_elem(elem)
-        self.Ksub[:,self.e2dofmap[elem]][self.e2dofmap[elem],:] -= self.klocs[elem]
-        self.K = self._apply_bcs(self.Kmat-self.Ksub)
+    def kill_elem(self, elem):
+        idx = self.e2dofmap[elem]
+        self.Ksub[idx[:, None], idx] -= self.klocs[elem]
+        self.K = self._apply_bcs(self.Kmat - self.Ksub)
 
     def solve(self,device="cuda"):
         K,F = self.K.to(device),self.Fvec.to(device)
@@ -78,16 +77,19 @@ class TopoEnv():
         self.init_vol = sum(self.elem_state)
         self.u = None
 
+
     def reset(self):
         # all elements in the design space are active
         self.elem_state = np.ones(self.model.nelem,dtype=int)
+        self.elem_taken =[]
 
         # get initial stiffness matrix from fe model
         self.model.init_Kmat()
 
         # solve initial state
-        self.u = self.model.solve()
-        strain_en = self.model.strain_energy(self.u)
+        u = self.model.solve()
+        
+        strain_en = self.model.strain_energy(u)
         
         # reset counter each episode
         self.count = 0
@@ -102,10 +104,19 @@ class TopoEnv():
 
         # solve for next state
         u = self.model.solve()
-        new_strain_en = self.model.strain_energy(u)
+        self.umin=torch.min(u).cpu().numpy()
+        self.umax=torch.max(u).cpu().numpy()
 
-        reward = (self.init_strain_energy/sum(new_strain_en))**2+(sum(self.elem_state/self.init_vol))**2
+        new_strain_en = self.model.strain_energy(u)
+        self.strain_reward = (1-sum(new_strain_en)/self.init_strain_energy)**2
+        self.vol_reward = (1-sum(self.elem_state)/self.init_vol)**2
+        reward = self.strain_reward+self.vol_reward
+
+        if self.count > len(self.elem_state) or action in self.elem_taken: 
+            done=True 
+        else: 
+            done = False
+
         self.count += 1
-        if self.count > len(self.elem_state): done=True 
-        else: done = False
+        self.elem_taken.append(action)
         return np.concatenate((self.elem_state,new_strain_en),axis=0),reward,done 
