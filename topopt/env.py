@@ -112,6 +112,7 @@ class TopoEnv():
         self.vol_reward = (1-sum(self.elem_state)/self.init_vol)**2
         reward = self.strain_reward+self.vol_reward
 
+
         if self.count > len(self.elem_state) or action in self.elem_taken: 
             done=True 
         else: 

@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import random 
+import numpy as np
 
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim):
@@ -30,7 +32,7 @@ class Critic(nn.Module):
         return state_value
 
 
-class TopoAgent:
+class A2CAgent:
     def __init__(self, state_dim, action_dim, actor_lr=1e-3, critic_lr=1e-3):
         self.actor = Actor(state_dim, action_dim)
         self.critic = Critic(state_dim)
@@ -69,3 +71,66 @@ class TopoAgent:
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
+
+class DQNNetwork(nn.Module):
+    def __init__(self, input_size, output_size):
+        super(DQNNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_size, 24)
+        self.fc2 = nn.Linear(24, 24)
+        self.fc3 = nn.Linear(24, output_size)
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return self.fc3(x)
+
+class DQNAgent:
+    def __init__(self, state_size, action_size):
+        self.state_size = state_size
+        self.action_size = action_size
+        self.memory = []
+        self.gamma = 0.95  # discount rate
+        self.epsilon = .9  # exploration rate
+        self.epsilon_decay = 0.999
+        self.epsilon_min = 0.01
+        self.model = DQNNetwork(state_size, action_size)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+
+    def select_action(self, state):
+        if np.random.rand() <= self.epsilon:
+            return np.random.choice(self.action_size)
+        with torch.no_grad():
+            state = torch.FloatTensor(state).unsqueeze(0)
+            q_values = self.model(state)
+            return int(torch.argmax(q_values))
+
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.append((state, action, reward, next_state, done))
+
+    def replay(self, batch_size):
+        if len(self.memory) < batch_size:
+            return
+
+        batch = random.sample(self.memory, batch_size)
+        states, actions, rewards, next_states, dones = zip(*batch)
+
+        states = torch.FloatTensor(states)
+        actions = torch.LongTensor(actions)
+        rewards = torch.FloatTensor(rewards)
+        next_states = torch.FloatTensor(next_states)
+        dones = torch.FloatTensor(dones)
+
+        current_q_values = self.model(states).gather(1, actions.unsqueeze(1))
+        next_q_values = self.model(next_states).max(1)[0].detach()
+
+        target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
+        target_q_values = target_q_values.unsqueeze(1)
+
+        loss = nn.MSELoss()(current_q_values, target_q_values)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        # if self.epsilon > self.epsilon_min:
+        #     self.epsilon *= self.epsilon_decay

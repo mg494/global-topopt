@@ -9,7 +9,7 @@ from timeit import default_timer as timer
 
 from utils.post import plot_dof
 from topopt.env import TopoEnv
-from topopt.rl import TopoAgent
+from topopt.rl import A2CAgent,DQNAgent
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -34,11 +34,12 @@ fem = FEModel(mesh,mat,StructuralElement)
 
 # RL Training
 episodes = 10000
+batch_size = 200
 
 env = TopoEnv(fem,support,load)
 state_size = 2*ndiv**2
 action_size = ndiv**2 
-agent = TopoAgent(state_size,action_size)
+agent = DQNAgent(state_size,action_size)
 
 fig,axs=plt.subplots(2,1)
 colors = ["white", "grey","grey","blue"]
@@ -61,12 +62,17 @@ for episode in range(episodes):
     reward_series=[]
     start_time = timer()
     while True:
-        # select action with actor critic rl
-        action_one_hot,action_log_prob = agent.select_action(state)
-        action = np.argmax(action_one_hot)
+        # # select action with actor critic rl
+        # action_one_hot,action_log_prob = agent.select_action(state)
+        # action = np.argmax(action_one_hot)
 
-        next_state,reward,done = env.step(action)
-        agent.update(state, action_log_prob, reward, next_state, done)
+        # next_state,reward,done = env.step(action)
+        # agent.update(state, action_log_prob, reward, next_state, done)
+
+        # dqn agent
+        action = agent.select_action(state)
+        next_state, reward, done = env.step(action)
+        agent.remember(state, action, reward, next_state, done)
 
         state = next_state
         total_reward += reward
@@ -81,10 +87,11 @@ for episode in range(episodes):
         
         if done:
             end_time = timer()
-            print(f"Episode: {episode + 1}, Total Reward: {total_reward}, Time: {end_time-start_time}, Iterations: {env.count}")
+            print(f"Episode: {episode + 1}, Total Reward: {total_reward}, Time: {end_time-start_time}, Iterations: {env.count}, Exploration rate: {agent.epsilon}")
             #print("Elements taken:"+" ".join(list(map(str,env.elem_taken))))
             break
-
+    agent.replay(batch_size)
+    
     plot_rewards.append(total_reward)
     plot_iters.append(env.count)
     plot_s_reward.append(env.strain_reward)
