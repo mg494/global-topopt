@@ -14,7 +14,10 @@ from topopt.rl import A2CAgent,DQNAgent
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
+from torch.utils.tensorboard import SummaryWriter
+
 logger = logging.getLogger('topopt')
+tb_writer= SummaryWriter()
 
 # Mesh and Model init
 ndiv = 20
@@ -33,8 +36,9 @@ load.add_by_point((1,0),(0,-100))
 fem = FEModel(mesh,mat,StructuralElement)
 
 # RL Training
-episodes = 10000
-batch_size = 200
+episodes = 50000
+batch_size = 40
+
 
 env = TopoEnv(fem,support,load)
 state_size = 2*ndiv**2
@@ -45,15 +49,6 @@ fig,axs=plt.subplots(2,1)
 colors = ["white", "grey","grey","blue"]
 nodes = [0.0, 0.4, 0.6,1.0]
 cmap = LinearSegmentedColormap.from_list("mycmap", list(zip(nodes, colors)))
-
-#outs = glob.glob("output/*.png")
-#for f in outs: os.remove(f)
-
-plot_rewards,plot_iters = [],[]
-plot_s_reward,plot_v_reward= [],[]
-plot_umax,plot_umin=[],[]
-trials_fig,trials_axs=plt.subplots(1,1)
-trials_fig.set_size_inches(12,12)
 
 logger.info("starts training loop")
 for episode in range(episodes):
@@ -88,37 +83,15 @@ for episode in range(episodes):
         if done:
             end_time = timer()
             print(f"Episode: {episode + 1}, Total Reward: {total_reward}, Time: {end_time-start_time}, Iterations: {env.count}, Exploration rate: {agent.epsilon}")
-            #print("Elements taken:"+" ".join(list(map(str,env.elem_taken))))
+
             break
+
     agent.replay(batch_size)
     
-    plot_rewards.append(total_reward)
-    plot_iters.append(env.count)
-    plot_s_reward.append(env.strain_reward)
-    plot_v_reward.append(env.vol_reward)
-    plot_umax.append(env.umax)
-    plot_umin.append(env.umin)
+    tb_writer.add_scalar("Total Reward",total_reward,episode)
+    tb_writer.add_scalar("Number of Iterations",env.count,episode)
+    tb_writer.add_scalar("Strain Reward",env.strain_reward,episode)
+    tb_writer.add_scalar("Volume Reaward",env.vol_reward,episode)
+    tb_writer.add_scalar("Deformation Minimum",env.umin,episode)
 
-    metrics_fig,metrics_axs = plt.subplots(2,2)
-    metrics_fig.set_size_inches(12,12)
-    metrics_axs[0,0].plot(plot_rewards,label="total_reward")
-    metrics_axs[0,0].legend(loc="upper left")
-    metrics_axs[0,1].plot(plot_iters,label="no_of_iterations")
-    metrics_axs[0,1].legend(loc="upper left")
-
-    metrics_axs[1,0].plot(plot_s_reward,label="strain_reward")
-    metrics_axs[1,0].plot(plot_v_reward,label="vol_reward")
-    metrics_axs[1,0].legend(loc="upper left")
-
-    metrics_axs[1,1].plot(plot_umax,label="umax")
-    metrics_axs[1,1].plot(plot_umin,label="umin")
-    metrics_axs[1,1].legend(loc="upper left")
-
-        
-    plt.savefig("output/metrics.png")
-    plt.close(metrics_fig)
-
-    trials_axs.plot(reward_series)
-
-    plt.savefig("output/trials.png")
-plt.close(trials_fig)
+tb_writer.close()

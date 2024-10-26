@@ -90,7 +90,7 @@ class DQNAgent:
         self.action_size = action_size
         self.memory = []
         self.gamma = 0.95  # discount rate
-        self.epsilon = .9  # exploration rate
+        self.epsilon = 1.  # exploration rate
         self.epsilon_decay = 0.999
         self.epsilon_min = 0.01
         self.model = DQNNetwork(state_size, action_size)
@@ -132,5 +132,5 @@ class DQNAgent:
         loss.backward()
         self.optimizer.step()
 
-        # if self.epsilon > self.epsilon_min:
-        #     self.epsilon *= self.epsilon_decay
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
