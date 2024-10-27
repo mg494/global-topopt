@@ -8,3 +8,9 @@ dist/
 *egg-info
 build/
 optim.rst
+edata.npy
+examples\test.py
+tests/*.code-workspace
+out.npy
+output/*.png
+runs/

@@ -1,18 +1,27 @@
 import numpy as np
 import logging
 from topopt.mesh import Displacement,Force
+import torch, sys,os
 
 logger = logging.getLogger('topopt')
+
 
 class FEModel:
     def __init__(self,mesh,mat,ElementTypeClass):
         self.elements = mesh.elements
+        self.nelem = len(mesh.elements[:,0])
         self.nodes = mesh.nodal_coords
         self.dofs_per_node = ElementTypeClass.dofs_per_node
         self.ndofs = mesh.nnodes * self.dofs_per_node
 
         self.node_to_dof_map = self._make_node_to_dof_map(self.nodes,self.dofs_per_node)
         self.elem_to_dof_map = self._make_elem_to_dof_map(self.elements,self.node_to_dof_map)
+        # 3d matrix to save local system matrices for post processing
+        try: 
+            os.remove("edata.npy") 
+        except FileNotFoundError: 
+            pass
+        self.klocs = None
 
         # instantiate element type for each unique 
         # element and material combination
@@ -40,25 +49,45 @@ class FEModel:
             elem_to_dof_map[idx,:] = dofs_on_elem
         return elem_to_dof_map
 
-    def _assemble(self):
+    def _assemble(self,x=None):
         self._K = np.zeros((self.ndofs,self.ndofs))
-        for el in self.elements:
+        kls = np.ndarray((self.nelem,8,8))
+        for idx,el in enumerate(self.elements):
             el_no = el[0]
             et_no = el[1]
             nodes_on_elem = el[3:]
             nodal_coords = self.nodes[nodes_on_elem]
             dofs = self.elem_to_dof_map[el_no]
             kl = self.ets[et_no].kloc(nodal_coords)
+            kls[idx,:,:] = kl
             rows = np.tile(dofs.reshape(len(dofs),1),len(dofs))
             cols = np.tile(dofs.reshape(1,len(dofs)),(len(dofs),1))
-            self._K[rows,cols] += kl
+            if not x is None:
+                self._K[rows,cols] += kl*x[idx]
+            else: 
+                self._K[rows,cols] += kl
+        np.save("edata",kls)
+        if "edata.npy" in os.listdir("./"): logger.info("saved edata to disk")
 
+    def kill_elem(self,elem,fact=0.999):
+        el = self.elements[elem]
+        el_no = el[0]
+        et_no = el[1]
+        nodes_on_elem = el[3:]
+        nodal_coords = self.nodes[nodes_on_elem]
+        dofs = self.elem_to_dof_map[el_no]
+        kl = self.ets[et_no].kloc(nodal_coords)
+        rows = np.tile(dofs.reshape(len(dofs),1),len(dofs))
+        cols = np.tile(dofs.reshape(1,len(dofs)),(len(dofs),1))
+        self._K[rows,cols] -= fact*kl
+        return self._K
+    
     @property
     def K(self):
         return self._K
     
-    def apply_bcs(bcs):
-        pass
+    def update_system_matrix(self,x):
+        self._assemble(x)
 
     def solve(self,support,load=None):
         neq = self._K.shape[0]
